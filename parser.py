@@ -10,7 +10,7 @@ class Table:
 
 # 定义ReferenceChain类
 class ReferenceChain:
-    def __init__(self, target, protocol, opt, source, destination, comment, condition):
+    def __init__(self, target, protocol, opt, source, destination, comment, condition, target_params=""):
         self.target = target  # 目标链
         self.protocol = protocol  # 协议
         self.opt = opt  # 选项
@@ -18,6 +18,7 @@ class ReferenceChain:
         self.destination = destination  # 目标地址
         self.comment = comment  # 注释
         self.condition = condition  # 条件
+        self.target_params = target_params  # 目标动作参数（-j 之后的参数）
 
     def __repr__(self):
         return (f"ReferenceChain(target={self.target}, protocol={self.protocol}, "
@@ -47,25 +48,50 @@ class IptablesParser:
 
     def parse(self):
         chain_re = re.compile(r'^:([A-Za-z0-9_]+)')  # 匹配链的正则表达式
-        rule_re = re.compile(r'^-A (\S+) (.+?) -j (\S+)(.*)')  # 匹配规则的正则表达式
+        # 匹配：-A <chain> <params> -j <target> [target_params]
+        rule_re = re.compile(r'^-A\s+(\S+)\s*(.*?)\s*-j\s+(\S+)(?:\s+(.*))?$')
 
         current_table = None
 
         for line in self.iptables_output:
             line = line.strip()
+            if not line or line.startswith('#'):
+                continue
             if line.startswith('*'):  # 表的定义
                 current_table = line[1:]
             elif line.startswith(':'):  # 链的定义
                 match = chain_re.match(line)
-                if match:
+                if match and current_table:
                     chain_name = match.group(1)
                     self.add_chain(chain_name, current_table)
             elif line.startswith('-A'):  # 链的规则
                 match = rule_re.match(line)
-                if match:
-                    chain_name, rule_details, target, rest = match.groups()
-                    protocol, opt, source, destination, comment, condition = self.extract_rule_details(rule_details + rest)
-                    ref_chain = ReferenceChain(target, protocol, opt, source, destination, comment, condition)
+                if match and current_table:
+                    chain_name, params, target, target_rest = match.groups()
+
+                    # 注释提取为 ["..."] 格式，可能为多个
+                    comments = re.findall(r'--comment\s+"([^"]*)"', params)
+                    comment_text = '[' + ', '.join(f'"{c}"' for c in comments) + ']' if comments else '[]'
+
+                    # 条件为去除注释后的参数（仅链与 -j 之间）
+                    params_no_comment = re.sub(r'-m\s+comment\b', '', params)
+                    params_no_comment = re.sub(r'--comment\s+"[^\"]*"', '', params_no_comment)
+                    condition = re.sub(r'\s+', ' ', params_no_comment).strip()
+
+                    # 目标动作参数（如果有）
+                    target_params = (target_rest or '').strip()
+
+                    # 组装规则对象（协议/源/目的等暂用默认占位）
+                    ref_chain = ReferenceChain(
+                        target=target,
+                        protocol='any',
+                        opt='',
+                        source='anywhere',
+                        destination='anywhere',
+                        comment=comment_text,
+                        condition=condition,
+                        target_params=target_params,
+                    )
 
                     # 使用完整的链名作为键来添加规则
                     full_chain_key = f'{current_table}_{chain_name}'

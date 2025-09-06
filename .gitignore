@@ -1,3 +1,4 @@
 iptables_graph
 .vscode/
 __pycache__/
+.venv/
